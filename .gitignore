@@ -10,6 +10,7 @@
 !repo/
 !sdk/
 !src/
+!build-clash.sh
 
 #Digilent Added ignore rules for Vivado projects
 

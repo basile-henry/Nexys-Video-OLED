@@ -21,8 +21,11 @@ module top(
     input clk,
     input rstn,// CPU Reset Button turns the display on and off
     input btnC,// Center DPad Button turns every pixel on the display on or resets to previous state
-    input btnD,// Upper DPad Button updates the delay to the contents of the local memory
+    input btnL,
     input btnU,// Bottom DPad Button clears the display
+    input btnR,
+    input btnD,// Upper DPad Button updates the delay to the contents of the local memory
+    input [7:0] switches,
     output oled_sdin,
     output oled_sclk,
     output oled_dc,
@@ -42,12 +45,6 @@ module top(
     localparam WriteWait  = 6;
     localparam UpdateWait = 7;
     
-    //text to be displayed
-    localparam str1=" I am the OLED  ", str1len=16;
-    localparam str2="  Display Demo  ", str2len=16;
-    localparam str3=" for Digilent's ", str3len=16;
-    localparam str4="   NexysVideo   ", str4len=16;
-    
     //state machine registers.
     reg [2:0] state = Init;//initialize the oled display on demo startup
     reg [5:0] count = 0;//loop index variable
@@ -59,12 +56,9 @@ module top(
     reg        disp_on_start = 1;       //turn the oled display on
     reg        disp_off_start = 0;      //turn the oled display off
     reg        toggle_disp_start = 0;   //turns on every pixel on the oled, or returns the display to before each pixel was turned on
-    reg        write_start = 0;         //writes a character bitmap into local memory
     
     //data signals for oled controls
     reg        update_clear = 0;        //when asserted high, an update command clears the display, instead of filling from memory
-    reg  [8:0] write_base_addr = 0;     //location to write character to, two most significant bits are row position, 0 is topmost. bottom seven bits are X position, addressed by pixel x position.
-    reg  [7:0] write_ascii_data = 0;    //ascii value of character to write to memory
     
     //active high command ready signals, appropriate start commands are ignored when these are not asserted high
     wire       disp_on_ready;
@@ -72,11 +66,17 @@ module top(
     wire       toggle_disp_ready;
     wire       update_ready;
     wire       write_ready;
+
+    reg  [8:0] write_base_addr = 0;
+    reg  [7:0] write_ascii_data = 0;
+    reg        write_start = 0;
     
     //debounced button signals used for state transitions
     wire       rst;     // CPU RESET BUTTON turns the display on and off, on display_on, local memory is filled from string parameters
     wire       dBtnC;   // Center DPad Button tied to toggle_disp command 
+    wire       dBtnL;   // Upper DPad Button tied to update without clear
     wire       dBtnU;   // Upper DPad Button tied to update without clear
+    wire       dBtnR;   // Upper DPad Button tied to update without clear
     wire       dBtnD;   // Bottom DPad Button tied to update with clear
     
     OLEDCtrl uut (
@@ -103,13 +103,33 @@ module top(
     );
 //    assign oled_cs = 1'b0;
 
-    always@(write_base_addr)
-        case (write_base_addr[8:7])//select string as [y]
-        0: write_ascii_data <= 8'hff & (str1 >> ({3'b0, (str1len - 1 - write_base_addr[6:3])} << 3));//index string parameters as str[x]
-        1: write_ascii_data <= 8'hff & (str2 >> ({3'b0, (str2len - 1 - write_base_addr[6:3])} << 3));
-        2: write_ascii_data <= 8'hff & (str3 >> ({3'b0, (str3len - 1 - write_base_addr[6:3])} << 3));
-        3: write_ascii_data <= 8'hff & (str4 >> ({3'b0, (str4len - 1 - write_base_addr[6:3])} << 3));
-        endcase
+    wire oledChar;
+    wire oledAddr;
+    wire oledStart;
+
+    clash_top clash_top_inst (
+        .clk       (clk),
+        .rst       (rst),
+        .switches  (switches),
+        .btnC      (dBtnC),
+        .btnL      (dBtnL),
+        .btnU      (dBtnU),
+        .btnR      (dBtnR),
+        .btnD      (dBtnD),
+        .oledReady (write_start), // ready
+        .leds      (led),
+        .oledChar  (oledChar),
+        .oledAddr  (oledAddr),
+        .oledStart (oledStart)
+    );
+
+    // always@(write_base_addr)
+    //     case (write_base_addr[8:7])//select string as [y]
+    //     0: write_ascii_data <= 8'hff & (str1 >> ({3'b0, (str1len - 1 - write_base_addr[6:3])} << 3));//index string parameters as str[x]
+    //     1: write_ascii_data <= 8'hff & (str2 >> ({3'b0, (str2len - 1 - write_base_addr[6:3])} << 3));
+    //     2: write_ascii_data <= 8'hff & (str3 >> ({3'b0, (str3len - 1 - write_base_addr[6:3])} << 3));
+    //     3: write_ascii_data <= 8'hff & (str4 >> ({3'b0, (str4len - 1 - write_base_addr[6:3])} << 3));
+    //     endcase
         
     //debouncers ensure single state machine loop per button press. noisy signals cause possibility of multiple "positive edges" per press.
     debouncer #(
@@ -123,10 +143,26 @@ module top(
     debouncer #(
         .COUNT_MAX(65535),
         .COUNT_WIDTH(16)
+    ) get_dBtnL (
+        .clk(clk),
+        .A(btnL),
+        .B(dBtnL)
+    );
+    debouncer #(
+        .COUNT_MAX(65535),
+        .COUNT_WIDTH(16)
     ) get_dBtnU (
         .clk(clk),
         .A(btnU),
         .B(dBtnU)
+    );
+    debouncer #(
+        .COUNT_MAX(65535),
+        .COUNT_WIDTH(16)
+    ) get_dBtnR (
+        .clk(clk),
+        .A(btnR),
+        .B(dBtnR)
     );
     debouncer #(
         .COUNT_MAX(65535),
@@ -145,7 +181,6 @@ module top(
         .B(rst)
     );
     
-    assign led = update_ready;//display whether btnU, BtnD controls are available.
     assign init_done = disp_off_ready | toggle_disp_ready | write_ready | update_ready;//parse ready signals for clarity
     assign init_ready = disp_on_ready;
     always@(posedge clk)
@@ -186,8 +221,8 @@ module top(
             end
             Write: begin
                 write_start <= 1'b1;
-                write_base_addr <= write_base_addr + 9'h8;
-                //write_ascii_data updated with write_base_addr
+                write_base_addr <= oledAddr;
+                write_ascii_data <= oledChar;
                 state <= WriteWait;
             end
             WriteWait: begin
